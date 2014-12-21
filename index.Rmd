@@ -1,0 +1,121 @@
+---
+title: "Practical Machine Learning programming assignment"
+  
+output: html_document
+---
+We read the test and training datasets from the provided links.
+```{r loadFiles, cache=TRUE, echo=FALSE}
+library(RCurl)
+x <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+trainingSet <- read.csv(text = x)
+
+x <- getURL("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+testingSet <- read.csv(text = x)
+
+
+```
+The datasets consists in 160 validables (20 observations in the test set and 19622 observations in the training set). 
+
+# Preprocessing
+
+A summary of the training dataset reveals that multiple rows contain a majority of NA values, which are removed from the dataset.
+Near zero variance variables are also removed from the dataset.
+
+```{r preprocessing}
+library(caret)
+nzv <- nearZeroVar(trainingSet, saveMetrics = TRUE)
+tidyTrainingSet<-trainingSet[,!nzv[,4]]
+tidyTrainingSet<-tidyTrainingSet[,colSums(is.na(tidyTrainingSet))==0]
+tidyTrainingSet<-tidyTrainingSet[,7:59]
+```
+
+# Principal components analysis 
+```{r principalComponents}
+prComp<-prcomp(tidyTrainingSet[,-53])
+screeplot(prComp, type = "l")
+preProc<-preProcess(tidyTrainingSet[,-53],method="pca",pcaComp = 7)
+trainPC<-predict(preProc, tidyTrainingSet[,-53])
+```
+The first 7 principal components explain the `r round(summary(prComp)$importance[3,7],2)*100` %  of the variance. Therefore we predict with the preProcess function the 7 most important principal components for the training set.
+
+
+```{r}
+qplot(trainPC$PC1, trainPC$PC2, colour=trainingSet$classe)
+```
+The figures plots the two first principal components and colours the points by classe.
+It can be seen that these two principal components achieve a fair amount of clustering of the outcomes, but more Principal Components are needed in order to achieve accurate classification.
+
+# setting training options for cross-validation
+
+we set train control for 10-fold cross-validation.
+
+```{r}
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           ## repeated ten times
+                           repeats = 10)
+```
+
+
+# Predicting with trees
+
+```{r trees}
+
+set.seed(32343)
+modelFitTree<-train(tidyTrainingSet$classe~.,data=trainPC, method="rpart", trControl = fitControl)
+
+library(rattle)
+fancyRpartPlot(modelFitTree$finalModel)
+print(modelFitTree$finalModel)
+
+
+predictedWithTree<-predict(modelFitTree, newdata = trainPC)
+
+table(predictedWithTree, trainingSet$classe)
+
+```
+
+The fitted tree model achieves only a `r round(sum(predictedWithTree==trainingSet$classe)/nrow(trainingSet),2)*100` % accuracy on the training set.
+
+# Random forest
+
+In random forests, there is no need for cross-validation or a separate test set to get an unbiased estimate of the test set error. It is estimated internally , during the run.
+
+```{r randomForest, echo=FALSE}
+modelFitRF<-train(tidyTrainingSet$classe~.,data=trainPC, method="rf")
+print(modelFitRF$finalModel)
+
+predictedWithRF<-predict(modelFitRF, newdata = trainPC)
+
+table(predictedWithRF, trainingSet$classe)
+```
+
+The fitted random fores model achieves  a `r round(sum(predictedWithRF==trainingSet$classe)/nrow(trainingSet),2)*100` % accuracy on the training set.
+
+# Predicting on the test set
+
+We run the selected model (random forest, which has the highest accuracy) on the test set, by first applying the same preprocessing to it as for the training set.
+
+```{r generatingPredictionResults}
+
+finalModel<-modelFitRF
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+nzv <- nearZeroVar(testingSet, saveMetrics = TRUE)
+testingSet<-testingSet[,!nzv[,4]]
+tidyTestingSet<-testingSet[,colSums(is.na(tidyTrainingSet))==0]
+tidyTestingSet<-tidyTestingSet[,7:59]
+testPC<-predict(preProc, tidyTestingSet[,-53])
+testPrediction<-predict(finalModel,newdata = testPC)
+setwd(dir = "~/Documents/PML/")
+pml_write_files(testPrediction)
+
+```
+
